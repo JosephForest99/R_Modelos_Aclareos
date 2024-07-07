@@ -1,0 +1,181 @@
+---
+title: "Ejemplo de ajustes de modelos de altura dominante"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+
+```{r}
+# Paqueterías/Librerías
+pacman::p_load(tidyverse, readxl, here, writexl, plotly,
+               install = F)
+
+# Función de negativo
+`%nin%` <- Negate(`%in%`)
+```
+
+
+# Datos
+
+```{r}
+# Lectura de base de datos
+datos <- read_excel(path = "Data/Estudio_Maxima_Densidad.xlsx")
+
+# Columnas de la base de datos
+# glimpse(datos)
+
+# Nuevo nombres de columnas
+nombre_columnas <- c("parcela", "N", "V", "AB", "AD", "E", "Mortalidad", "V_mort",
+                     "AB_mort", "V_punta_10cm", "V_mort_punta10cm", "V_punta_15cm")
+
+# Cambiar el nombre de las columnas
+names(datos) <- nombre_columnas
+
+# Columnas de la base de datos
+glimpse(datos)
+```
+
+
+## Datos no traslapados
+
+Se asume que el primer aclareo se hizo a los 10.3 años de las parcelas 9 a 18. Además, también se asume que un segundo aclareo fue aplicado a la parcela a la edad de 22.3 años.
+
+```{r}
+datos_notras <- datos |> 
+  
+  # Agrupar base de datos
+  group_by(parcela) |>
+  
+  # nuevas columnas y datos a partir de la segunda fila de cada parcela
+  transmute_at(.vars = vars(N:E), .funs = lead) |> 
+  
+  # Renombrar las nuevas filas
+  rename_with(.fn = ~ paste0(., "2"), .cols = everything()) |> 
+  
+  # Unir con la base original
+  bind_cols(datos) |> 
+  
+  # Renombrar las columnas creadas
+  relocate(N2, .after = N) |> 
+  relocate(V2, .after = V) |> 
+  relocate(AB2, .after = AB) |> 
+  relocate(AD2, .after = AD) |> 
+  relocate(E2, .after = E) |>
+  
+  
+  # Asignar etiqueta de aclareo
+  mutate(Aclareo = ifelse(E2 == 10.3 & parcela %in% 9:18, "A",
+                          ifelse(E2 == 22.1 & parcela == 9, "A", "SA")), 
+         .after = E2)
+
+```
+
+
+
+# Ajuste de modelos de altura dominante
+
+## CURVA GUÍA
+
+```{r}
+## Modelo de Chapman-Richards
+AD_CR_base <- function(B0, B1, B2, E){
+  
+  AD = B0 * (1 - exp(-B1 * E))^B2
+  
+  return(AD)
+}
+
+# Ajuste con nls (CURVA GUÍA)
+fit_AD_CG_nls <- nls(AD ~ AD_CR_base(B0, B1, B2, E),
+                  data = datos_notras,
+                  start = c(B0 = 20, B1 = 0.01, B2 = 0.9))
+
+
+# Resumen del ajuste de nls
+summary(fit_AD_CG_nls)
+
+```
+
+
+## ADA
+
+```{r}
+## Modelo de Chapman-Richards ADA (B0)
+AD_CR_base <- function(B0, B1, B2, E){
+  
+  AD2 = AD1 * ((1 - exp(-B1 * E2))/(1 - exp(-B1 * E1)))^B2
+  
+  return(AD2)
+}
+
+# Ajuste con nls (ADA)
+fit_AD_AD_nls <- nls(AD2 ~ AD_fn(B1, B2, AD, E, E2),
+                     data = datos_notras,
+                     start = c(B1 = 0.01,
+                               B2 = 0.9))
+
+# Resumen del ajuste
+summary(fit_AD_AD_nls)
+
+```
+
+## Sistema de ecuaciones
+
+```{r}
+# Activar la librería
+library(systemfit)
+
+# Modelo de curva guía
+AD_CG <- AD ~ B0 * (1 - exp(-B1 * E))^B2
+
+# Modelo ADA
+AD_ADA_B0 <- AD2 ~ AD * ((1 - exp(-B1 * E2))/(1 - exp(-B1 * E)))^B2
+
+# Etiquetas de los modelos
+etiquetas_modelos <- list("Curva_guias", "ADA")
+
+# Valores de inicio
+start_values <- c(B0 = 28, B1 = 0.05, B2 = 1.2)
+
+# Modelo
+AD_Mod_SisEcua <- list(AD_CG, AD_ADA_B0)
+
+# Ajuste SUR
+fit_AD_SUR <- nlsystemfit(method = "SUR",
+                          eqns = AD_Mod_SisEcua,
+                          startvals = start_values,
+                          data = datos_notras |> filter(!is.na(AD2)),
+                          eqnlabels = etiquetas_modelos)
+
+# Resumen del ajuste
+resumen_SUR <- tibble(Par = fit_AD_SUR$b,
+                      SE = fit_AD_SUR$se,
+                      t_valor = fit_AD_SUR$t,
+                      p_valor = fit_AD_SUR$p,
+                      r2 = fit_AD_SUR$eq[[1]]$r2,
+                      r2adj = fit_AD_SUR$eq[[1]]$adjr2)
+
+resumen_SUR
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

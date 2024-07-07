@@ -1,0 +1,61 @@
+---
+title: "SCR-Aclareos"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+
+# AB con MEM
+```{r}
+fit_AB_MEM <- nlme(AB ~ fn_AB_00(B0, B1, B2, B3, N, E, AD),
+                   datos_notras |> filter(Aclareo == "SA"),
+                   start = c(B0 = 1, B1 = 0.5, B2 = 1, B3 = 0.9),
+                   fixed = B0+B1+B2+B3~1,
+                   random = B0~1|Densidad,
+                   method = "ML")
+
+summary(fit_AB_MEM)
+
+# Parámetros aleatorios
+ranef(fit_AB_MEM)
+```
+
+```{r}
+# Estimaciones
+datos_estimaciones_mem <- datos_nivel_densidad |> 
+  # Estimaciones de AD
+  mutate(AD2 = predict(fit_AD, datos_nivel_densidad)) |> 
+  
+  # Estimaciones de N
+  mutate(N2 = case_when(Densidad == "Alta" ~ mortalidad(Narb = 2800, b1 = coef(fit_N)[1], E2),
+                        Densidad == "Media" ~ mortalidad(Narb = 1900, b1 = coef(fit_N)[2], E2),
+                        Densidad == "Baja" ~ mortalidad(Narb = 1000, b1 = coef(fit_N)[2], E2),
+                        ),
+         .by = AD) |> 
+  mutate(AB2 = predict(fit_AB_MEM, newdata = data.frame(E = E2, AD = AD2, N = N2,
+                                                       Densidad = Densidad)))
+
+datos_estimaciones_mem
+```
+
+```{r}
+# Gráfica de AB
+
+ggplot(datos_notras, aes(x = E, y = AB, group = parcela)) +
+  geom_point() +
+  geom_line() +
+  geom_line(datos_estimaciones_mem,
+            mapping = aes(x = E2, y = AB2, group = Densidad, color = Densidad),
+            linewidth = 1.2) #+
+  
+  # facet_wrap(~ Densidad)
+```
+
+
+```{r}
+
+```
+
+
+

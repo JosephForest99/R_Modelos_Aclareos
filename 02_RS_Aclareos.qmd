@@ -1,0 +1,147 @@
+---
+title: "Modelo segmentado de densidad"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+# Gráfica
+
+```{r}
+# Activar la librería
+library(tidyverse)
+
+# Lectura de datos de densidad
+datos_RS <- datos_notras |> 
+  mutate(log_N = log(N),
+         log_DCM = log(DCM)) 
+
+# Gráfica
+plot_nom <- ggplot(datos_RS |> filter(Aclareo == "SA"), aes(x = DCM, y = N, group = parcela)) +
+  geom_point(size = 2.5) +
+  geom_line(size = 0.9) +
+  labs(y = "N (arb/ha)",
+       x = "DCM (m)") +
+  theme_bw()
+
+# Imprimir la gráfica  
+print(plot_nom)
+```
+
+## Escala logarítmica
+
+```{r}
+# Gráfica con nueva escala
+plot_log <- plot_nom + scale_y_log10() + scale_x_log10() +
+  labs(x = "log DCM (m)",
+       y = "log N (arb/ha)")
+
+# Imprimir la gráfica
+print(plot_log)
+```
+
+# Modelo 1 completo
+
+```{r}
+# Modelo 1 (completo)
+Modelo1 <- function(c1,c2,c3,b1,b2,b3,b4,log_DCM){
+  
+  # Variables indicadoras
+  I1 = ifelse(log_DCM <= c1, 1, 0)
+  I2 = ifelse(log_DCM > c1 & log_DCM <= c2, 1, 0)
+  I3 = ifelse(log_DCM > c2 & log_DCM <= c3, 1, 0)
+  I4 = ifelse(log_DCM > c3, 1, 0)
+  
+  # Modelo
+  ln_N = b1*I1 + (b1 + b2*(log_DCM - c1)^2)*I2 +
+         (b1 + b2*(c2 - c1)^2 + b3*(log_DCM - c2))*I3 +
+         (b1 + b2*(c2 - c1)^2 + b3*(c3 - c2) + b4*(log_DCM - c3))*I4
+  
+  # Valor a regresar
+  return(ln_N)
+}
+```
+
+## Ajuste
+
+```{r}
+# Activamos la librería
+library(minpack.lm)
+
+# Datos sin aclareo
+datos_RS_SA <- datos_RS |> filter(Aclareo == "SA")
+
+# Ajuste Modelo 1
+fit1 <- nlsLM(log_N ~ Modelo1(c1,c2,c3,b1,b2,b3,b4,log_DCM),
+              data = datos_RS_SA,
+              start = list(b1=7.1,
+                           b2=-1.5,
+                           b3=-1.6,
+                           b4=-3.5,
+                           c1=2.5,
+                           c2=3.1,
+                           c3=4.0))
+summary(fit1)
+```
+
+# Modelo 2
+
+```{r}
+# Función "Modelo 2"
+Modelo2 <- function(c2,c3,b1,b2,b3,b4,log_DCM){
+  
+  # Variables indicadoras
+  I2 = ifelse(log_DCM <= c2, 1, 0)
+  I3 = ifelse(log_DCM > c2 & log_DCM <= c3, 1, 0)
+  I4 = ifelse(log_DCM > c3, 1, 0)
+  
+  # Modelo
+  log_N = (b1+b2*(log_DCM)^2)*I2 +
+          (b1+b2*(c2)^2 + b3*(log_DCM-c2))*I3 +
+          (b1+b2*(c2)^2 + b3*(c3-c2) + b4*(log_DCM-c3))*I4
+  
+  # Valor a regresar
+  return(log_N)
+}
+```
+
+## Ajuste del modelo
+
+```{r}
+# Ajuste del modelo 2
+fit2 <- nlsLM(log_N ~ Modelo2(c2,c3,b1,b2,b3,b4,log_DCM), data = datos_RS_SA,
+            start = list(b1=8.5,
+                         b2=-0.07,
+                         b3=-1.68,
+                         b4=-3,
+                         c2=3,
+                         c3=3.5))
+# Resumen del ajuste
+summary(fit2)
+```
+
+```{r}
+DCM = 1:50
+# Estimar valores con parámetros del modelo 1
+M2 <- predict(fit2, newdata = data.frame(log_DCM = log(DCM)))
+
+# Nuevo df con valores estimados
+M2_df <- data.frame(DCM, M2)
+
+# Puntos de inflexión
+M2_ci = coef(fit2)[5:6]
+
+# N hat de los puntos de inflexión
+M2_yci = predict(fit2, newdata = data.frame(log_DCM = M2_ci))
+
+# df con puntos de inflexión
+M2_df_ci <- data.frame(ci = M2_ci, y_ci = M2_yci)
+
+# Proyección de ajuste
+plot_log + geom_line(data = M2_df,
+                     mapping = aes(x = DCM, y = exp(M2), group = F),
+                     color = "red", size = 2) +
+  
+  geom_point(M2_df_ci, mapping = aes(x = exp(ci), y = exp(y_ci), group = F),
+            color = "blue", size = 3)
+```

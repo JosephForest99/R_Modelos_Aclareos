@@ -1,0 +1,192 @@
+---
+title: "Sistema de Crecimiento y Rendimiento con Aclareos"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+# SCR - SA
+
+## Función 
+
+```{r}
+SCR_SA <- function(Narb, IS, E, Eb){
+  
+  # Modelo de altura dominante
+  AD <- function(IS, Eb, E){
+    # Parámetros
+    B0 = 0.805884
+    B1 = 0.025645
+    B2 = 1.146303
+
+    # Proyección de AD
+    AD2 = E^B2 / ((Eb^B2/IS - B1*Eb^B2) + B1*E^B2)
+    return(round(AD2, 2))
+
+  }
+  
+  # Modelo de mortalidad
+  mortalidad <- function(Narb, E, AD){
+    
+    # Parámetros 
+    B1 = -0.00405
+    N = NA
+    N[1] = Narb
+    
+    for (i in 2:length(E)) {
+      N[i] = N[i-1] * exp(B1*AD[i]*(E[i]-E[i-1]))
+    }
+    
+    return(round(N,0))
+    
+  }
+  
+  # Modelo de AB
+  AB <- function(AD, N, E){
+    # Parámetros
+    B0 = 0.691622; B1 =	0.942115; B2 = -0.31488
+    
+    # Predicción
+    AB2 = NA
+    AB2[1] = exp(B0)*AD[1]^B1*exp(B2/E[1])
+    
+    # Proyección
+    for (i in 2:length(E)) {
+      AB2[i] = AB2[i-1]*((AD[i]^B1*exp(B2/E[i])) / (AD[i-1]^B1*exp(B2/E[i-1])))
+
+    }
+    
+    return(round(AB2,2))
+    
+  }
+  
+  # Volumen (s2)
+  V <- function(E, AB, AD, N){
+    # Parámetros
+    B0 = -0.76259; B1	= 1.063642; B2 = 0.966123; B3 =	-0.06355
+
+    # Predicción
+    V2 = NA
+    V2 = exp(B0)*AB[1]^B1*AD[1]^B2*N[1]^B3
+    
+    for (i in 2:length(E)) {
+      V2[i] = V2[i-1]*(AB[i]/AB[i-1])^B1 * (AD[i]/AD[i-1])^B2 * (N[i]/N[i-1])^B3
+    }
+    
+    return(round(V2,2))
+    
+  }
+  
+  # Aplicación de modelos
+  
+  # Altura dominante
+  AD2 = AD(IS = IS, Eb = Eb, E = E)
+  # Mortalidad
+  N2 = mortalidad(Narb = Narb, E = E, AD2)
+  # Área basal
+  AB2 = AB(AD = AD2, N = N2, E = E)
+  # Volumen
+  V2 = V(E = E, AB = AB2, AD = AD2, N = N2)
+  
+  # Salida
+  SCR_SA_DF <- data.frame(Densidad = as.character(Narb), E, N2, AD2, AB2, V2)
+  return(SCR_SA_DF)
+  
+}
+```
+
+## Aplicación
+
+```{r}
+# Variables de entrada para el SCR-SA
+
+# Vector de edad
+E <- 1:40
+# Edad base
+Eb <- 30
+# Densidad inicial
+Narb <- 3000
+# Índice de sitio
+IS = 24
+
+# Aplicación de la función
+r <- SCR_SA(Narb = Narb, IS = IS, E = E, Eb = Eb)
+r
+
+r2 <- map_dfr(.x = c(3000, 2000, 1000), .f = ~ SCR_SA(.x, IS, E, Eb))
+```
+
+## Gráficas
+
+### AD
+
+```{r}
+ggplot(datos_notras |> filter(AD > 0), aes(x = E, y = AD, group = parcela))+
+  geom_line()+
+  geom_point()+
+  
+  geom_line(data = r, mapping = aes(x = E, y = AD2, group = NULL),
+            color = "red", linewidth = 1.2)
+```
+
+### N
+
+```{r}
+ggplot(datos_notras, aes(x = E, y = N, group = parcela))+
+  geom_line()+
+  geom_point()+
+  
+  geom_line(data = r2, mapping = aes(x = E, y = N2, group = Densidad),
+            color = "red", linewidth = 1.2)
+```
+
+### AB
+
+```{r}
+ggplot(datos_notras, aes(x = E, y = AB, group = parcela))+
+  geom_line()+
+  geom_point()+
+  
+  geom_line(data = r2, mapping = aes(x = E, y = AB2, group = Densidad),
+            color = "red", linewidth = 1.2)
+```
+
+### V
+
+```{r}
+ggplot(datos_notras, aes(x = E, y = V, group = parcela))+
+  geom_line()+
+  geom_point()+
+  
+  geom_line(data = r2, mapping = aes(x = E, y = V2, group = Densidad, color = factor(Densidad)),
+            linewidth = 1.2)
+```
+
+# SCR - CA
+
+## CI ajuste
+
+```{r}
+## Modelo de Pieenar y Schiver (1984)
+fn_CI <- function(B1, B2, B3, CI1, E1, E2){
+  # CI2 = CI1*exp(-(B1+B2*CI1)*((E2-E1))^B3)
+  CI2 = exp(-(B1+B2*CI1)*((E2-E1))^B3)
+  return(CI2)
+}
+
+fit_CI <- nls(CI2 ~ fn_CI(B1, B2, B3, CI, E, E2),
+                 data = datos_notras |> filter(Aclareo == "CA"),
+                 start = c(B1 = 1.04, B2 = -0.60, B3 = 0.808))
+
+summary(fit_CI)
+```
+
+## Simulación
+
+
+
+
+
+
+
+

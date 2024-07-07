@@ -1,0 +1,346 @@
+---
+title: "Modelos de área basal y volumen con aclareos"
+description: "Ajustar modelos de crecimiento para obtener el rendimiento en rodales aclareados"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+```{r}
+# Paqueterías/Librerías
+pacman::p_load(tidyverse, readxl, here, writexl, plotly, nlme, systemfit,
+               install = F)
+
+# Función de negativo
+`%nin%` <- Negate(`%in%`)
+```
+
+# Datos
+
+```{r}
+# Lectura de base de datos
+datos <- read_excel(path = "Data/Estudio_Maxima_Densidad.xlsx")
+
+# Columnas de la base de datos
+# glimpse(datos)
+
+# Nuevo nombres de columnas
+nombre_columnas <- c("parcela", "N", "V", "AB", "AD", "E", "Mortalidad", "V_mort",
+                     "AB_mort", "V_punta_10cm", "V_mort_punta10cm", "V_punta_15cm")
+
+# Cambiar el nombre de las columnas
+names(datos) <- nombre_columnas
+
+# Agregar el ABu y CI
+datos <- datos |> 
+  
+  # BAu
+  mutate(ABu = ifelse(parcela %in% c(9,10,13,14,15),
+                      datos |> filter(parcela == 1) |> pull(AB),
+                      
+                      ifelse(parcela %in% c(11,16),
+                             datos |> filter(parcela == 2) |> pull(AB),
+                             
+                             ifelse(parcela %in% c(12,17,18),
+                                    datos |> filter(parcela == 3) |> pull(AB), 0
+                                    ))),
+         .before = AB) |> 
+  
+  # Calculo de CI
+  mutate(CI = (ABu-AB)/ABu, .after = AB)
+
+# Columnas de la base de datos
+glimpse(datos)
+```
+
+## Datos no traslapados
+
+Se asume que el primer aclareo se hizo a los 10.3 años de las parcelas 9 a 18. Además, también se asume que un segundo aclareo fue aplicado a la parcela a la edad de 22.3 años.
+
+```{r}
+datos_notras <- datos |> 
+  
+  # Agrupar base de datos
+  group_by(parcela) |>
+  
+  # nuevas columnas y datos a partir de la segunda fila de cada parcela
+  transmute_at(.vars = vars(N:E, V_punta_10cm, V_punta_15cm), .funs = lead) |> 
+  
+  # Renombrar las nuevas filas
+  rename_with(.fn = ~ paste0(., "2"), .cols = everything())  |> 
+  
+  # Unir con la base original
+  bind_cols(datos) |> 
+  
+  # Renombrar las columnas creadas
+  relocate(N2, .after = N) |> 
+  relocate(V2, .after = V) |> 
+  relocate(AB2, .after = AB) |> 
+  relocate(AD2, .after = AD) |> 
+  relocate(E2, .after = E) |>
+  relocate(V_punta_10cm2, .after = V_punta_10cm) |> 
+  relocate(V_punta_15cm2, .after = V_punta_15cm) |> 
+  relocate(ABu2, .after = ABu) |>
+  relocate(CI2, .after = CI) |> 
+  
+  
+  # Asignar etiqueta de aclareo
+  mutate(Anio_Aclareo = ifelse(E2 == 10.3 & parcela %in% 9:18, "A",
+                          ifelse(E2 == 22.1 & parcela == 9, "A", "SA")), 
+         .after = E2) |> 
+  
+  # Nivel de densidad
+  mutate(Densidad = factor(case_when(max(N) > 2000 ~ "Alta",
+                                     max(N) > 1000 & max(N) <= 2000 ~ "Media",
+                                     .default = "Baja")),
+         Densidad2 = factor(ifelse(max(N) > 2000, "Alta", "Baja")),
+         .after = Anio_Aclareo) |> 
+  
+  # Diámetro cuadrático Medio
+  mutate(DCM = sqrt(40000/pi*AB/N)) |> 
+  
+  # Parcelas con Aclareo
+  mutate(Aclareo = ifelse(parcela %in% c(9,10,13,14,15,
+                                         11,16,
+                                         12,17,18),
+                          "CA", "SA"),
+         .after = Anio_Aclareo) |> 
+  
+  # Identificar el comienzo del aclareo
+  mutate(star_aclareo = ifelse(E2 > 10.3 & parcela %in% 9:18, "ResAcl", NA),
+         .after = Aclareo)
+
+
+# Guardar la base de datos
+# write.csv(datos_notras |> filter(!is.na(AD2)), file = "Data/Aclareos.csv")
+```
+
+# Gráficas exploratorias
+
+```{r}
+# Parcela seleccionada
+parcela <- dplyr::filter(datos, parcela == 10)
+```
+
+## Altura dominante
+
+```{r}
+# Gráfica de altura dominante
+plot_AD <- ggplot(datos |> filter(AD > 0), aes(x = E, y = AD, group = parcela)) +
+  
+  geom_point() +
+  geom_line()
+
+plot_AD
+```
+
+## Densidad
+
+```{r}
+# Gráfica de crecimiento de área basal
+plot_N <- ggplot(datos_notras, aes(x = E, y = N, group = parcela, color = factor(parcela))) +
+  
+  geom_point() +
+  geom_line() +
+  
+  facet_wrap(~ Densidad)
+
+# Presentar gráfica
+ggplotly(plot_N)
+```
+
+## Área basal
+
+```{r}
+# Gráfica de crecimiento de área basal
+plot_ab <- ggplot(datos, aes(x = E, y = AB, group = parcela, color = factor(parcela))) +
+  
+  geom_point() +
+  geom_line()
+
+# Presentar gráfica
+ggplotly(plot_ab)
+```
+
+## Volumen
+
+```{r}
+# Gráfica de crecimiento de área basal
+plot_v <- ggplot(datos, aes(x = E, y = V, group = parcela, color = factor(parcela))) +
+  
+  geom_point() +
+  geom_line()
+
+# Presentar gráfica
+ggplotly(plot_v)
+```
+
+# SCR - Totalidad de rodal SIN ACLAREOS
+
+## AD - Ajuste
+
+```{r}
+# Función R del Modelo de Chapman-Richards (Anamórfico)
+AD_fn <- function(B1, B2, AD1, E1, E2){
+  
+  AD2 = AD1 * ((1 - exp(-B1 * E2))/(1 - exp(-B1 * E1)))^B2
+  
+  return(AD2)
+}
+
+
+# Ajuste del modelo de altura dominante
+fit_AD <- nls(AD2 ~ AD_fn(B1, B2, AD, E, E2),
+              data = datos_notras,
+              start = c(B1 = 0.01,
+                        B2 = 0.9))
+```
+
+### Resumen del ajuste
+
+```{r}
+# Resumen de ajuste del modelo de altura dominante
+summary(fit_AD)
+```
+
+### Gráfica de crecimiento de AD
+
+```{r}
+# df para curvas de IS
+datos_IS <- as_tibble(expand.grid(E2 = 0:40, AD = c(22, 24, 26))) |>
+  mutate(E = 30) 
+
+# Estimaciones
+hat_AD2 <- tibble(AD2 = predict(fit_AD, datos_IS)) |> 
+  # Unir la base de datos de IS
+  bind_cols(datos_IS)
+
+# Grafica con predicciones de AD
+plot_AD +
+  
+  geom_line(data = hat_AD2,
+            mapping = aes(x = E2, y = AD2, group = factor(AD), color = factor(AD)),
+            linewidth = 1.2) +
+  
+  labs(y = "Altura dominante (m)",
+       x = "Edad (años)",
+       color = "Índice de sitio (m):")
+
+```
+
+## N - Ajuste (mortalidad)
+
+```{r}
+# Modelo de mortalidad
+N_fn <- function(B1, N1, E1, E2){
+  
+  N2 = N1 * exp(B1*(E2-E1))
+  
+  return(N2)
+  
+}
+
+# Ajuste del modelo
+fit_N <- nls(N2 ~ N_fn(B1, N, E, E2),
+             data = datos_notras,
+             start = c(B1 = -0.01))
+
+```
+
+### Resumen del ajuste
+
+```{r}
+# Resumen del ajuste del modelo de mortalidad
+summary(fit_N)
+
+```
+
+### Gráfica de mortalidad
+
+```{r}
+# Edades
+E2 = 0:40
+
+# Función para estimar mortalidad
+mortalidad <- function(Narb, b1, E){
+    
+    # Parámetros 
+    b1 = -0.075542; N = NA; N[1] = Narb
+    
+    for (i in 2:length(E)) {
+      
+      N[i] <- N[i-1] * exp(b1*(E[i] - E[i-1]))
+      
+    }
+    
+    return(round(N,0))
+    
+  }
+
+# Estimaciones de mortalidad con N inicial de 2000
+hat_N2 <- tibble(N2 = mortalidad(3000, b1 = -0.075542, E2),
+                 E2) 
+  
+# Gráfica de mortalidad
+plot_N +
+  
+  geom_line(data = hat_N2,
+            mapping = aes(x = E2, y = N2, group = NULL),
+            linewidth = 1.2) +
+  
+  labs(y = "Densidad (arb ha-1)",
+       x = "Edad (años)")
+
+
+```
+
+## AB - Ajuste
+
+```{r}
+# Modelo tipo Schumacher
+fn_AB <- function(B1, B2, B3, AB1, N1, N2, E1, E2, AD1, AD2){
+  
+  AB2 = AB1 * (N2/N1)^B1 * (E2/E1)^B2 * (AD2/AD1)^B3
+  
+  return(AB2)
+  
+}
+
+# Ajuste del modelo
+fit_AB <- nls(AB2 ~ fn_AB(B1, B2, B3, AB, N, N2, E, E2, AD, AD2),
+    data = datos_notras |> filter(AD > 0),
+    start = c(B1 = 0.5, B2 = 1, B3 = 0.9))
+
+```
+
+### Resumen del ajuste
+
+```{r}
+# Resumen del ajuste del modelo
+summary(fit_AB)
+
+```
+
+```{r}
+# df para curvas de IS
+datos_IS <- as_tibble(expand.grid(E2 = 0:40, AD = c(22, 24, 26))) |>
+  mutate(E = 30) 
+
+# Estimaciones
+hat_AD2 <- tibble(AD2 = AD_fn(0.05741345, 1.10675918, datos_IS$AD, datos_IS$E,
+                              datos_IS$E2)) |> 
+  # Unir la base de datos de IS
+  bind_cols(datos_IS)
+
+# Grafica con predicciones de AD
+plot_AD +
+  
+  geom_line(data = hat_AD2,
+            mapping = aes(x = E2, y = AD2, group = factor(AD), color = factor(AD)),
+            linewidth = 1.2) +
+  
+  labs(y = "Altura dominante (m)",
+       x = "Edad (años)",
+       color = "Índice de sitio (m):")
+
+```

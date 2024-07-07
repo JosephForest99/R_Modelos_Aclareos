@@ -1,0 +1,104 @@
+---
+title: "SCR_Aclareos"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+# SCR - SIN ACLAREO
+
+## AD
+
+```{r}
+# Modelo de predicción AD1
+AD1 <- AD ~ B0 * (1 - exp(-B1 * E))^B2
+
+# Modelo de proyección AD2
+AD2 <- AD2 ~ AD * ((1 - exp(-B1 * E2))/(1 - exp(-B1 * E)))^B2
+
+# Etiquetas de los modelos
+etq_AD <- list("AD1", "AD2")
+
+# Valores de inicio
+sv_AD <- c(B0 = 28, B1 = 0.05, B2 = 1.2)
+
+# Sistema de ecuaciones
+SisEq_AD <- list(AD1, AD2)
+
+# Ajuste SUR
+FIT_SUR_AD <- nlsystemfit(method = "SUR",
+                          eqns = SisEq_AD,
+                          startvals = sv_AD,
+                          data = datos_notras |> filter(!is.na(AD2)),
+                          eqnlabels = etq_AD)
+
+# Resumen del ajuste
+RES_SUR_AD <- tibble(Par = FIT_SUR_AD$b,
+                     SE = FIT_SUR_AD$se,
+                     t_valor = FIT_SUR_AD$t,
+                     p_valor = FIT_SUR_AD$p,
+                     r2 = FIT_SUR_AD$eq[[1]]$r2,
+                     r2adj = FIT_SUR_AD$eq[[1]]$adjr2)
+
+RES_SUR_AD
+
+```
+
+## N
+
+```{r}
+# Modelo de mortalidad
+N_fn <- function(B1, N1, E1, E2){
+  
+  N2 = N1 * exp(B1*(E2-E1))
+  
+  return(N2)
+  
+}
+
+# Ajuste del modelo
+FIT_N <- nls(N2 ~ N_fn(B1, N, E, E2),
+             data = datos_notras,
+             start = c(B1 = -0.01))
+
+# Resumen
+summary(FIT_N)
+
+```
+
+## AB
+
+```{r}
+# Modelo de predicción AB1
+AB1 <- AB ~ B0*N^B1*E^B2*AD^B3
+
+# Modelo de proyección AD2
+AB2 <- AB2 ~ AB * (N2/N)^B1 * (E2/E)^B2 * (AD2/AD)^B3
+
+# Etiquetas de los modelos
+etq_AB <- list("AB1", "AB2")
+
+# Valores de inicio
+sv_AB <- c(B0 = 0.08, B1 = 0.78, B2 = 0.57, B3 = 0.7)
+
+# Sistema de ecuaciones
+SisEq_AB <- list(AB1, AB2)
+
+# Ajuste SUR
+FIT_SUR_AB <- nlsystemfit(method = "SUR",
+                          eqns = SisEq_AB,
+                          startvals = sv_AB,
+                          data = datos_notras |> filter(!is.na(AD2) & AD > 0),
+                          eqnlabels = etq_AB)
+
+# Resumen del ajuste
+RES_SUR_AB <- tibble(Par = FIT_SUR_AB$b,
+                     SE = FIT_SUR_AB$se,
+                     t_valor = FIT_SUR_AB$t,
+                     p_valor = FIT_SUR_AB$p,
+                     r2 = FIT_SUR_AB$eq[[1]]$r2,
+                     r2adj = FIT_SUR_AB$eq[[1]]$adjr2)
+
+RES_SUR_AB
+
+```
