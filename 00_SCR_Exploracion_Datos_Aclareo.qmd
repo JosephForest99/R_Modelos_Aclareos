@@ -282,7 +282,10 @@ hat_N2 <- tibble(N2 = mortalidad(3000, b1 = -0.075542, E2),
                  E2) 
   
 # Gráfica de mortalidad
-plot_N +
+ggplot(datos_notras, aes(x = E, y = N, group = parcela)) +
+  
+  geom_point() +
+  geom_line() +
   
   geom_line(data = hat_N2,
             mapping = aes(x = E2, y = N2, group = NULL),
