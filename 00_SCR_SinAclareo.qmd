@@ -1,13 +1,31 @@
 ---
-title: "Sistema de Crecimiento y Rendimiento con Aclareos"
+title: "Sistema de Crecimiento y Rendimiento SIN y CON Aclareos"
 author: "Abel Joseph Hernández-Martínez"
 format: html
 editor: visual
 ---
 
-# SCR - SA
+
+```{r}
+# Paqueterías/Librerías utilizadas en este código
+pacman::p_load(tidyverse, install = F)
+
+# Función de negativo
+`%nin%` <- Negate(`%in%`)
+```
+
+# SCR - Sin Aclareo
 
 ## Función 
+
+La siguiente función `SCR_SA` (Sistema de Crecimiento y Rendimiento Sin Aclareo) se creo para obtener la tabla de rendimiento. Los argumentos de la función son los siguientes:
+
+- `Narb`: Densidad inicial.
+- `IS`: Índice de sitio
+- `E`: Vector de edades para realizar la simulación. Al menos dos elementos tiene que tener el vector para obtener los resultados. En un futuro se puede mejorar la función para realizar la estimación con una sola observación
+- `Eb`: Edad base utilizada en el modelo de altura dominante.
+
+Los parámetros de cada modelo corresponden a los resultados obtenidos en el ajuste de sistema de ecuaciones realizado en SAS y reportado en el documento de word.
 
 ```{r}
 SCR_SA <- function(Narb, IS, E, Eb){
@@ -33,6 +51,7 @@ SCR_SA <- function(Narb, IS, E, Eb){
     N = NA
     N[1] = Narb
     
+    # Proyección
     for (i in 2:length(E)) {
       N[i] = N[i-1] * exp(B1*AD[i]*(E[i]-E[i-1]))
     }
@@ -69,6 +88,7 @@ SCR_SA <- function(Narb, IS, E, Eb){
     V2 = NA
     V2 = exp(B0)*AB[1]^B1*AD[1]^B2*N[1]^B3
     
+    # Proyección
     for (i in 2:length(E)) {
       V2[i] = V2[i-1]*(AB[i]/AB[i-1])^B1 * (AD[i]/AD[i-1])^B2 * (N[i]/N[i-1])^B3
     }
@@ -97,6 +117,8 @@ SCR_SA <- function(Narb, IS, E, Eb){
 
 ## Aplicación
 
+En el siguiente código se muestra la aplicación de la función `SCR_SA` creada en la sección anterior. Se asume que el rodal inicia con una densidad de 3,000 árboles por hectárea y tiene un índice de sitio de 24 m a una edad base de 30 años.
+
 ```{r}
 # Variables de entrada para el SCR-SA
 
@@ -109,16 +131,30 @@ Narb <- 3000
 # Índice de sitio
 IS = 24
 
-# Aplicación de la función
+# Resultados de la función
 r <- SCR_SA(Narb = Narb, IS = IS, E = E, Eb = Eb)
 r
 
-r2 <- map_dfr(.x = c(3000, 2000, 1000), .f = ~ SCR_SA(.x, IS, E, Eb))
 ```
 
-## Gráficas
+La función también puede obtener la tabla de rendimiento para diferentes densidades iniciales. En este ejemplo se utilizan tres densidades iniciales: 3,000, 2,000 y 1,000 árboles por hectárea con la misma información de `IS`, `E` y el vector de edades creados previamente.
 
-### AD
+```{r}
+# Vector con las tres densidades
+densidades_iniciales <- c(3000, 2000, 1000)
+
+# Tablas de rendimiento para tres densidades
+r2 <- map_dfr(.x = densidades_iniciales, .f = ~ SCR_SA(.x, IS, E, Eb))
+r2
+```
+
+
+
+## Gráficas con resultados
+
+### Altura dominante
+
+Resultados del modelo ajustado de Hossfeld polimórfico $\beta_0$ (Ecuación 1 del documento pdf que reporta los resultados).
 
 ```{r}
 ggplot(datos_notras |> filter(AD > 0), aes(x = E, y = AD, group = parcela))+
@@ -129,7 +165,9 @@ ggplot(datos_notras |> filter(AD > 0), aes(x = E, y = AD, group = parcela))+
             color = "red", linewidth = 1.2)
 ```
 
-### N
+### Mortalidad
+
+Resultados con la ecuación 3 del pdf.
 
 ```{r}
 ggplot(datos_notras, aes(x = E, y = N, group = parcela))+
@@ -140,7 +178,9 @@ ggplot(datos_notras, aes(x = E, y = N, group = parcela))+
             color = "red", linewidth = 1.2)
 ```
 
-### AB
+### Área basal
+
+Resultados con la ecuación 5 del pdf.
 
 ```{r}
 ggplot(datos_notras, aes(x = E, y = AB, group = parcela))+
@@ -151,7 +191,9 @@ ggplot(datos_notras, aes(x = E, y = AB, group = parcela))+
             color = "red", linewidth = 1.2)
 ```
 
-### V
+### Volumen total
+
+Resultados con la ecuación 9 del pdf.
 
 ```{r}
 ggplot(datos_notras, aes(x = E, y = V, group = parcela))+
@@ -162,9 +204,13 @@ ggplot(datos_notras, aes(x = E, y = V, group = parcela))+
             linewidth = 1.2)
 ```
 
-# SCR - CA
+# SCR - Con Aclareo
 
 ## CI ajuste
+
+Ajuste del modelo de proyección del índice de supresión (Pieenar y Schiver, 1948) o índice de competencia (González-Benecke et al 2012).
+
+La función de abajo corresponde a la ecuación 11.
 
 ```{r}
 ## Modelo de Pieenar y Schiver (1984)

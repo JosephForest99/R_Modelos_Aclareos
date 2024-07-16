@@ -1,6 +1,7 @@
 
 
 # SCR de Pieenar & Schiver (1985) -----------------------------------------
+# Ejemplo con resultados del artículo de Pieenar & Schiver (1985)
 
 # Modelo de mortalidad de Pieenar y Schiver (1985)
 fn_S_PS1985 <- function(N, E){

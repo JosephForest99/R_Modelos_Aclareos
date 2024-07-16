@@ -216,7 +216,25 @@ fit_AB_13 <- nls(AB ~ fn_AB_13(B0, B1, B2, AD, N),
 
 summary(fit_AB_13)
 
+# Modelo 9 de Wences 2017
+MAB <- function(B0, B1, B2, B3, E, N, AD){
+  AB = exp(B0 + B1/E + B2*log(N) + B3*log(AD))
+  return(AB)
+}
 
+fit_AB_06 <- nls(AB ~ MAB(B0,B1,B2,B3,E,N,AD),
+                 data = datos_notras,
+                 start = c(B0 = -3, B1 = -6, B2 = 0.5, B3 = 1.1))
+
+# Modelo 9 de Wences 2017
+MAB01 <- function(B0, B1, B2, E, N, AD){
+  AB = exp(B0 + B1/E)*(AD*N)^B2
+  return(AB)
+}
+
+fit_AB_07 <- nls(AB ~ MAB01(B0,B1,B2,E,N,AD),
+                 data = datos_notras,
+                 start = c(B0 = -5, B1 = -12, B2 = 0.9))
 
 
 

@@ -1,0 +1,181 @@
+---
+title: "Sistema de Crecimiento y Rendimiento con Aclareos"
+subtitle: "Modelo de aclareo propuesto por Gyawali & Bukhart (2014)"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+
+```{r}
+# Paqueterías/Librerías utilizadas en este código
+pacman::p_load(tidyverse, readxl, here, writexl,
+               install = F)
+
+# Función de negativo
+`%nin%` <- Negate(`%in%`)
+```
+
+# Datos
+
+Datos originales proporcionado por el Dr. Héctor de los Santos.
+
+```{r}
+# Lectura de base de datos
+datos <- read_excel(path = "Data/Estudio_Maxima_Densidad.xlsx")
+
+# Columnas de la base de datos
+# glimpse(datos)
+
+# Nuevo nombres de columnas
+nombre_columnas <- c("parcela", "N", "V", "AB", "AD", "E", "Mortalidad", "V_mort",
+                     "AB_mort", "V_punta_10cm", "V_mort_punta10cm", "V_punta_15cm")
+
+# Cambiar el nombre de las columnas
+names(datos) <- nombre_columnas
+
+# Columnas de la base de datos
+glimpse(datos)
+```
+
+# SCR - Método de Gyawali & Bukhart (2014)
+
+## Datos
+
+Se agregaron nuevas variables para ajustar el modelo de Gyawali & Bukhart (2014):
+
+- `Et`: Edad de la parcela al tiempo del aclareo.
+- `ABu`: Es el área basal pre-aclareo.
+- `B`: Es la proporción de área basal después del aclareo.
+
+```{r}
+# Selección de datos básicos para el SCR
+datos_scr <- datos |> 
+  
+  # Selección de variables
+  dplyr::select(parcela, N, V, AB, AD, E) |> 
+  
+  # Nuevas variables
+  mutate(across(N:E, lead, .names = "{.col}2"), .keep = "all", .by = parcela) |> 
+  
+  # Reubicar las variables
+  # reduce(.x = list(c('N2','N'), c('V2','V'), c('AB2','AB'), c('AD2','AD'), c('E2','E')),
+  #        .f = ~ relocate(.x, .y[1], .after = .y[2]),
+  #        .init = .x) #|> 
+  
+  # Renombrar variables
+  rename_with(.cols = !c(parcela, ends_with("2")), .fn = ~ paste0(.x, 1, recycle0 = T)) |> 
+  
+  # Etiqueta de aclareo
+  mutate(Aclareo = case_when(E2 >= 10.3 & parcela %in% c(10:18) ~ "A1",
+                             E2 >= 10.3 & E2 < 22.1 & parcela == 9 ~ "A1",
+                             E2 >= 22.1 & parcela == 9 ~ "A2",
+                             .default = "SA")) |> 
+  
+  # Edad del aclareo y AB antes del aclareo
+  mutate(Et = case_when(Aclareo %in% c("A1", "A2") ~ min(E1),
+                        .default = 0),
+         ABu = case_when(Aclareo %in% c("A1", "A2") ~ first(AB1),
+                        .default = 0),
+         .by = c(parcela, Aclareo)) |> 
+  
+  # Proporción de Área basal después del aclareo
+  mutate(B = case_when(ABu == 0 ~ 0,
+                       .default = AB2/ABu))
+
+# Guardar Datos para ajustar modelos en SAS
+# write.csv(datos_scr, file = "Data/Datos_Aclareo_02.csv")
+
+```
+
+
+## Modelo de área basal
+
+Se eliminaron las parcelas 9, 10 y 11, ya que no se identifica bien el año del aclareo o aclareos.
+
+### AB Sin Aclareo
+
+Las parcelas sin aclareo son del 1 al 8 y la 17.
+
+```{r}
+# Modelo base de Chapman-Richards (SOLO PARCELAS SIN ACLAREO)
+(FIT_AB_PLOT_SA <- nls(AB1 ~ Richards(B0, B1, B2, E1),
+    data = datos_scr |> filter(parcela %in% c(1:8, 17)),
+    start = c(B0 = 56, B1 = 0.01, B2 = 0.6))
+)
+
+# Modelo base de Chapman-Richards (TODAS LAS PARCELAS CON Y SIN ACLAREO)
+(FIT_AB_PLOT_SAYCA <- nls(AB1 ~ Richards(B0, B1, B2, E1),
+    data = datos_scr |> filter(parcela %nin% 9:11),
+    start = c(B0 = 56, B1 = 0.01, B2 = 0.6))
+)
+
+
+# Estimaciones con los modelos ajustados
+datos_ab_sa_hat <- tibble(E1 = 0:40,
+                          AB1_SA = predict(FIT_AB_PLOT_SA, newdata = data.frame(E1 = 0:40)),
+                          AB1_SAYCA = predict(FIT_AB_PLOT_SAYCA, newdata = data.frame(E1 = 0:40)))
+
+```
+
+Comparación gráfica con las estimaciones de los dos modelos ajustados anteriormente.
+
+```{r}
+# Comparación de estimaciones
+ggplot(datos_scr |> filter(parcela %nin% 9:11),
+       aes(x = E1, y = AB1, group = parcela)) +
+  geom_line() +
+  
+  geom_line(data = datos_ab_sa_hat,
+            mapping = aes(x = E1, y = AB1_SA, group = NULL), color = "red", linewidth = 1.2) +
+  
+    geom_line(data = datos_ab_sa_hat,
+            mapping = aes(x = E1, y = AB1_SAYCA, group = NULL), color = "blue", linewidth = 1.2)
+
+  
+```
+
+### AB Con Aclareo
+
+En el siguiente código se construye la función propuesta por Gyawali & Bukhart (2014) de tipo Chapman-Richards. Los parámetros del modelo son:
+
+- $\beta_i$: parámetros del modelo de chapman-richads.
+- $r$: tasa de crecimiento después del aclareo.
+- $k$: parámetro de la duración del efecto del aclareo.
+
+De acuerdo con los resultados del ajuste, ESTOS NO FUERON ADECUADOS, YA QUE EL PARÁMETRO $r$ ES NEGATIVO, LO CUAL INDICA QUE EN LUGAR DE TENER UNA TASAS DE CRECIMIENTO DESPUÉS DEL ACLAREO SE PRESENTA UN 'DECRECIMIENTO'. 
+
+```{r}
+# Función de Chapman-Richards CON EFECTO DE ACLAREO
+fn_CR_B0_AB <- function(B1, B2, r, k, AB1, E1, E2, Et, B){
+  
+  ft = ifelse(B == 0, 1,
+              (1/B)^(r*(-(E2-Et)^2 + k*(E2-Et))/E2^2))
+  
+  AB2 = AB1*((1-exp(-B1*E2))/(1-exp(-B1*E1)))^(1/B2) * ft
+  
+  return(AB2)
+
+}
+
+# Ajuste del modelo
+nls(AB2 ~ fn_CR_B0_AB(B1, B2, r, k, AB1, E1, E2, Et, B),
+    data = datos_scr |> filter(parcela %nin% 9:11),
+    start = c(B1 = 0.01, B2 = 0.4, r = 1, k = 10))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

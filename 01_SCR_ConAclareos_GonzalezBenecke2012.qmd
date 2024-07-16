@@ -1,0 +1,552 @@
+---
+title: "Sistema de Crecimiento y Rendimiento con Aclareos"
+author: "Abel Joseph Hernández-Martínez"
+format: html
+editor: visual
+---
+
+```{r}
+# Paqueterías/Librerías
+pacman::p_load(tidyverse, readxl, here, writexl,
+               install = F)
+
+# Función de negativo
+`%nin%` <- Negate(`%in%`)
+```
+
+# Datos
+
+De acuerdo con la metodología de González-Benecke et al (2012), para modelar el aclareo es necesario contar con la información de la contraparte "sin aclareo" (ABu) y después calcular el valor del índice de supresión (Pieenar y Schiver) o índice de competencia (Gónzalez-Benecke et al 2012).
+
+```{r}
+# Lectura de base de datos
+datos <- read_excel(path = "Data/Estudio_Maxima_Densidad.xlsx")
+
+# Columnas de la base de datos
+# glimpse(datos)
+
+# Nuevo nombres de columnas
+nombre_columnas <- c("parcela", "N", "V", "AB", "AD", "E", "Mortalidad", "V_mort",
+                     "AB_mort", "V_punta_10cm", "V_mort_punta10cm", "V_punta_15cm")
+
+# Cambiar el nombre de las columnas
+names(datos) <- nombre_columnas
+
+# Agregar el ABu y CI
+datos <- datos |> 
+  
+  # BAu
+  mutate(ABu = ifelse(parcela %in% c(9,10,13,14,15),
+                      datos |> filter(parcela == 1) |> pull(AB),
+                      
+                      ifelse(parcela %in% c(11,16),
+                             datos |> filter(parcela == 2) |> pull(AB),
+                             
+                             ifelse(parcela %in% c(12,17,18),
+                                    datos |> filter(parcela == 3) |> pull(AB), 0
+                                    ))),
+         .before = AB) |> 
+  
+  # Calculo de CI
+  mutate(CI = (ABu-AB)/ABu, .after = AB)
+
+# Columnas de la base de datos
+glimpse(datos)
+```
+
+## Datos no traslapados
+
+Se asume que el primer aclareo se hizo a los 10.3 años de las parcelas 9 a 18. Además, también se asume que un segundo aclareo fue aplicado a la parcela a la edad de 22.3 años.
+
+```{r}
+datos_notras <- datos |> 
+  
+  # Agrupar base de datos
+  group_by(parcela) |>
+  
+  # nuevas columnas y datos a partir de la segunda fila de cada parcela
+  transmute_at(.vars = vars(N:E, V_punta_10cm, V_punta_15cm), .funs = lead) |> 
+  
+  # Renombrar las nuevas filas
+  rename_with(.fn = ~ paste0(., "2"), .cols = everything())  |> 
+  
+  # Unir con la base original
+  bind_cols(datos) |> 
+  
+  # Renombrar las columnas creadas
+  relocate(N2, .after = N) |> 
+  relocate(V2, .after = V) |> 
+  relocate(AB2, .after = AB) |> 
+  relocate(AD2, .after = AD) |> 
+  relocate(E2, .after = E) |>
+  relocate(V_punta_10cm2, .after = V_punta_10cm) |> 
+  relocate(V_punta_15cm2, .after = V_punta_15cm) |> 
+  relocate(ABu2, .after = ABu) |>
+  relocate(CI2, .after = CI) |> 
+  
+  
+  # Asignar etiqueta de aclareo
+  mutate(Anio_Aclareo = ifelse(E2 == 10.3 & parcela %in% 9:18, "A",
+                          ifelse(E2 == 22.1 & parcela == 9, "A", "SA")), 
+         .after = E2) |> 
+  
+  # Nivel de densidad
+  mutate(Densidad = factor(case_when(max(N) > 2000 ~ "Alta",
+                                     max(N) > 1000 & max(N) <= 2000 ~ "Media",
+                                     .default = "Baja")),
+         Densidad2 = factor(ifelse(max(N) > 2000, "Alta", "Baja")),
+         .after = Anio_Aclareo) |> 
+  
+  # Diámetro cuadrático Medio
+  mutate(DCM = sqrt(40000/pi*AB/N)) |> 
+  
+  # Parcelas con Aclareo
+  mutate(Aclareo = ifelse(parcela %in% c(9,10,13,14,15,
+                                         11,16,
+                                         12,17,18),
+                          "CA", "SA"),
+         .after = Anio_Aclareo) |> 
+  
+  # Identificar el comienzo del aclareo
+  mutate(star_aclareo = ifelse(E2 > 10.3 & parcela %in% 9:18, "ResAcl", NA),
+         .after = Aclareo)
+
+
+# Guardar la base de datos para ajustar modelos en SAS
+# write.csv(datos_notras |> filter(!is.na(AD2)), file = "Data/Aclareos.csv")
+```
+
+
+# SCR - Sin Aclareo
+
+## AD
+
+```{r}
+# Función R del Modelo de Chapman-Richards (Anamórfico)
+fn_AD <- function(B1, B2, AD1, E1, E2){
+  
+  AD2 = AD1 * ((1 - exp(-B1 * E2))/(1 - exp(-B1 * E1)))^B2
+  
+  return(AD2)
+}
+
+# Ajuste del modelo de altura dominante
+fit_AD <- nls(AD2 ~ fn_AD(B1, B2, AD, E, E2),
+              data = datos_notras,
+              start = c(B1 = 0.01,
+                        B2 = 0.9))
+
+# Resumen del ajuste
+summary(fit_AD)
+
+```
+
+## N
+
+```{r}
+# Modelo de mortalidad
+N_fn <- function(B1, N1, E1, E2){
+  
+  N2 = N1 * exp(B1*(E2-E1))
+  
+  return(N2)
+  
+}
+
+# Ajuste del modelo con tres niveles de densidad
+fit_N <- nls(N2 ~ N_fn(B1[Densidad], N, E, E2),
+             data = datos_notras,
+             start = list(B1 = c(-0.09, -0.04811, -0.021181)))
+
+# Resumen del ajuste
+summary(fit_N)
+
+# Ajuste del modelo con dos niveles de densdiad
+fit_N_02 <- nls(N2 ~ N_fn(B1[Densidad2], N, E, E2),
+             data = datos_notras,
+             start = list(B1 = c(-0.09, -0.04811)))
+
+# Resumen del ajuste
+summary(fit_N_02)
+
+# summary(nls(N2 ~ N_fn(B1, N, E, E2),
+#              data = datos_notras |> filter(Densidad == "Alta"),
+#              start = list(B1 = -0.01)))
+
+```
+
+## AB
+
+```{r}
+# Modelo de AB (González-Benecke et al 2012) - es una opción
+# Modelo de Chapman-Richards
+fn_AB <- function(B0, B1, B2, E){
+  AB = B0*(1-exp(-B1*E))^B2
+  return(AB)
+}
+
+# Ajuste del modelo
+fit_AB <- nls(AB ~ fn_AB(B0 = 56.22, B1[Densidad], B2, E),
+                 data = datos_notras,
+                 start = list(B1 = c(0.03, 0.03, 0.03), B2 = 0.8 ))
+
+# Resumen del ajuste
+summary(fit_AB)
+
+```
+Otra opción que integra el número de árboles, corresponde a la ecuación 14 del pdf de resultados.
+
+```{r}
+## Modelo de AB que integra el N, E y AD tipo Schumacher & Hall
+fn_AB_13 <- function(B0, B1, B2, B3, N, E, AD){
+  AB = B0*N^B1*E^B2*AD^B3
+  return(AB)
+}
+
+fit_AB_13 <- nls(AB ~ fn_AB_13(B0, B1, B2, B3, N, E, AD),
+                 data = datos_notras,
+                 # start = list(B0 = -8.1, B1 = 3, B2 = 1),
+                 start = list(B0 = 0.05, B1 = 0.33, B2 = 0.31, B3 = 0.69)
+                 )
+
+summary(fit_AB_13)
+```
+
+## V
+
+```{r}
+# Modelo de volumen (Tipo Schumacher)
+fn_V <- function(B0, B1, B2, AD, AB){
+  V = B0*AD^B1*AB^B2
+  return(V)
+}
+
+# Ajuste del modelo
+fit_V <- nls(V ~ fn_V(B0, B1, B2, AD, AB),
+             data = datos_notras,
+             start = list(B0 = 0.3, B1 = 1, B2 = 1))
+
+summary(fit_V)
+
+```
+
+## V punta 15 cm
+
+```{r}
+# Ajuste del modelo
+fit_V_p15cm <- nls(V_punta_10cm ~ fn_V(B0, B1, B2, AD, AB),
+                   data = datos_notras,
+                   start = list(B0 = 0.3, B1 = 1, B2 = 1))
+
+summary(fit_V_p15cm)
+
+```
+
+## V comercial (NO AJUSTÓ)
+
+```{r}
+# Modelo de volumen comercial (punta 15 cm)
+fn_Vm <- function(B1, B2, B3, B4, B5, d, dm, V, DCM, N){
+  Vm = V*exp(-B1*(d/DCM)^B2 + B3*N^B4*(dm/DCM)^B5)
+  return(Vm)
+}
+
+# Ajuste del volumen comercial
+fit_Vm <- nls(V_punta_10cm ~ fn_Vm(B1, B2, B3, B4, B5, d = 15, dm = 30, V, DCM, N),
+              data = datos_notras |> filter(V_punta_10cm > 0),
+              # start = list(B1 = 0.2, B2 = 1.6, B3 = 0.1, B4 = 0.1, B5 = 5)
+              start = list(B1 = 1.2, B2 = 4.6, B3 = -0.61, B4 = -0.1, B5 = 9)
+              )
+
+```
+
+# Gráficas de resultados
+
+## Datos para graficar
+
+```{r}
+# Función para estimar mortalidad
+mortalidad <- function(Narb, b1, E){
+    
+    # Parámetros 
+    # b1 = -0.075542;
+    N = NA; N[1] = Narb
+    
+    for (i in 2:length(E)) {
+      
+      N[i] <- N[i-1] * exp(b1*(E[i] - E[i-1]))
+      
+    }
+    
+    return(round(N,0))
+    
+  }
+
+# df para curvas de IS
+datos_IS <- as_tibble(expand.grid(E2 = 0:40, AD = c(22, 24, 26))) |>
+  mutate(E = 30) |> 
+  mutate(Densidad = rep(levels(datos_notras$Densidad), 1, each = 41))
+
+
+# df con niveles de densidad
+niveles_densidad <- levels(datos_notras$Densidad)
+datos_nivel_densidad <- tibble(expand.grid(E2 = 0:40,
+                                           Densidad = niveles_densidad)) |> 
+  mutate(AD = 24, E = 30)
+
+# Estimaciones del SCR
+datos_estimaciones <- datos_nivel_densidad |> 
+  
+  # Estimaciones de AD
+  mutate(AD2 = predict(fit_AD, datos_nivel_densidad)) |> 
+  
+  # Estimaciones de N
+  mutate(N2 = case_when(Densidad == "Alta" ~ mortalidad(Narb = 2800, b1 = coef(fit_N)[1], E2),
+                        Densidad == "Media" ~ mortalidad(Narb = 1900, b1 = coef(fit_N)[2], E2),
+                        Densidad == "Baja" ~ mortalidad(Narb = 1000, b1 = coef(fit_N)[2], E2),
+                        ),
+         .by = AD) |> 
+  
+  # Estimaciones de AB
+  # mutate(AB2 = predict(fit_AB, newdata = data.frame(E = E2, AD = AD2, N = N2,
+  #                                                      Densidad = Densidad))) |> 
+  mutate(AB2 = predict(fit_AB_13, newdata = data.frame(E = E2, AD = AD2, N = N2,
+                                                       Densidad = Densidad)))  |>
+  # 
+  # Estimaciones de V
+  mutate(V2 = predict(fit_V, newdata = data.frame(E = E2, AD = AD2, N = N2, AB = AB2))) |> 
+  
+  # Estimaciones de V
+  mutate(V_p15cm_2 = predict(fit_V_p15cm, newdata = data.frame(E = E2, AD = AD2, N = N2, AB = AB2)))
+
+```
+
+### AD
+
+```{r}
+# Gráfica de AD
+
+ggplot(datos |> filter(AD > 0), aes(x = E, y = AD, group = parcela)) +
+  geom_point() +
+  geom_line() +
+  geom_line(datos_estimaciones,
+            # mapping = aes(x = E2, y = AD2, group = AD, color = factor(AD)),
+            mapping = aes(x = E2, y = AD2, group = NULL),
+            linewidth = 1.2) 
+
+```
+
+### N
+
+```{r}
+# Gráfica de N
+
+ggplot(datos, aes(x = E, y = N, group = parcela)) +
+  geom_point() +
+  geom_line() +
+  geom_line(datos_estimaciones,
+            mapping = aes(x = E2, y = N2, group = Densidad, color = Densidad),
+            linewidth = 1.2) 
+
+```
+
+### AB
+
+```{r}
+# Gráfica de AB
+
+ggplot(datos_notras, aes(x = E, y = AB, group = parcela)) +
+  geom_point() +
+  geom_line() +
+  geom_line(datos_estimaciones,
+            mapping = aes(x = E2, y = AB2, group = Densidad, color = Densidad),
+            linewidth = 1.2) #+
+  
+  # facet_wrap(~ Densidad)
+
+```
+
+### V
+
+```{r}
+# Gráfica de V
+
+ggplot(datos_notras, aes(x = E, y = V, group = parcela)) +
+  geom_point() +
+  geom_line() +
+  geom_line(datos_estimaciones,
+            mapping = aes(x = E2, y = V2, group = Densidad, color = Densidad),
+            linewidth = 1.2) +
+  
+  geom_line(datos_estimaciones,
+            mapping = aes(x = E2, y = V_p15cm_2, group = Densidad, color = Densidad),
+            linewidth = 1.2, linetype = 2) 
+  
+  # facet_wrap(~ Densidad)
+
+```
+
+# SCR - Con Aclareo
+
+## CI (índice de supresión)
+
+### Gráfica
+
+```{r}
+# Gráfica del CI
+ggplot(datos_notras |> filter(!is.na(star_aclareo)),
+       aes(x = E, y = CI, group = parcela)) +
+  
+  geom_point()+
+  geom_line()
+```
+
+### Ajuste del modelo
+
+```{r}
+# Modelo de CI (Gonzalez-Benecke et al 2012)
+fn_CI <- function(B1, CI1, E1, E2){
+  
+  CI2 = CI1 * exp((B1/E2) * (E2-E1))
+  return(CI2)
+}
+
+# Ajuste del modelo
+fit_CI <- nls(CI2 ~ fn_CI(B1, CI, E, E2),
+              data = datos_notras |> filter(Aclareo == "CA"),
+              start = c(B1 = -1.5))
+
+# Resumen del ajuste
+summary(fit_CI)
+```
+
+La función de abajo corresponde a la ecuación 11.
+
+```{r}
+## Modelo de Pieenar y Schiver (1984)
+fn_CI <- function(B1, B2, B3, CI1, E1, E2){
+  # CI2 = CI1*exp(-(B1+B2*CI1)*((E2-E1))^B3)
+  CI2 = exp(-(B1+B2*CI1)*((E2-E1))^B3)
+  return(CI2)
+}
+
+fit_CI <- nls(CI2 ~ fn_CI(B1, B2, B3, CI, E, E2),
+                 data = datos_notras |> filter(Aclareo == "CA"),
+                 start = c(B1 = 1.04, B2 = -0.60, B3 = 0.808))
+
+summary(fit_CI)
+```
+
+# Simulación del SCR
+
+Suponga que se tiene una densidad de rodal de 3000 arb/ha y se aplicará un aclareo a la edad de 10 y 20 años al 40 y 30 % de la densidad, se pretende hacer una simulación de crecimiento de 30 años.
+
+1.  Estimar Nu
+
+```{r}
+# Años y porcentaje de aclareos
+Anio_aclareo = c(10,20)
+Prop_aclareo = c(0.4,0.3)
+
+# Vector de edades
+# Número de años a simular
+n = 30
+E = sort(c(0:n,Anio_aclareo), decreasing = T)
+Prop = rep(1, length(E))
+ntot <- length(E)
+
+for (i in 1:length(Prop_aclareo)) {
+  for (j in 1:length(E)) {
+    if (Anio_aclareo[i] == E[j]) {
+      Prop[j] = Prop_aclareo[i]
+      break
+    }
+  }
+}
+
+datos_simulacion <- tibble(E = E, Prop = 1 - Prop) |> 
+  mutate(Prop = ifelse(Prop == 0, 1, Prop)) |> 
+  arrange(E, desc(Prop))
+
+# Función para estimar mortalidad 2
+mortalidad2 <- function(Narb, b1, E, Prop){
+    
+    # Parámetros 
+    # b1 = -0.075542;
+    N = NA; N[1] = Narb
+    
+    for (i in 2:length(E)) {
+      
+      if (E[i] == E[i-1]) {
+        
+        N[i] = N[i-1] * Prop[i]
+          
+      }else{
+      
+        N[i] = N[i-1] * exp(b1*(E[i] - E[i-1]))
+      }
+    }
+    
+    return(round(N,0))
+    
+}
+
+
+# Vector de porcentajes
+datos_simulacion1 <- datos_simulacion |> 
+  mutate(N2u = mortalidad(Narb = 2800, b1 = coef(fit_N)[1], E),
+         N2t = mortalidad2(Narb = 2800, b1 = coef(fit_N)[1], E, Prop))
+```
+
+```{r}
+ggplot(datos_simulacion1, aes(x = E, y = N2u)) +
+  geom_line() +
+  
+  geom_line(mapping = aes(x = E, y = N2t))
+```
+
+## Estimar AD
+
+```{r}
+datos_simulacion2 <- datos_simulacion1 |> 
+  mutate(AD2 = predict(fit_AD, newdata = data.frame(AD = rep(24, ntot), E = rep(50, ntot), E2 = E)))
+```
+
+## Estimar AB
+
+2.  Estimar el AB
+
+```{r}
+datos_simulacion3 <- datos_simulacion2 |> 
+  
+  mutate(AB2u = predict(fit_AB_13, newdata = data.frame(E = E, AD = AD2, N = N2u))) |> 
+  mutate(AB2t = predict(fit_AB_13, newdata = data.frame(E = E, AD = AD2, N = N2t)),
+         CI = (AB2u-AB2t)/AB2u,
+         AB2t1 = AB2u * (1-CI))
+
+```
+
+```{r}
+ggplot(datos_simulacion3, aes(x = E, y = AB2u)) +
+  geom_line() +
+  
+  geom_line(mapping = aes(x = E, y = AB2t1))
+```
+
+## Estimación V
+
+```{r}
+datos_simulacion4 <- datos_simulacion3 |> 
+  mutate(V2u = predict(fit_V, newdata = data.frame(E = E, AD = AD2, AB = AB2u)),
+         V2t = predict(fit_V, newdata = data.frame(E = E, AD = AD2, AB = AB2t1)))
+  
+```
+
+```{r}
+ggplot(datos_simulacion4, aes(x = E, y = V2u)) +
+  geom_line() +
+  
+  geom_line(mapping = aes(x = E, y = V2t))
+```
+
+# Volumen comercial

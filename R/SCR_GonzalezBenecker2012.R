@@ -1,5 +1,6 @@
 
 # SCR de González-Benecke et al (2012) ------------------------------------
+# Ejemplo con resultados del artículo de González-Benecke et al (2012)
 
 
 ## Modelo de AD ----
